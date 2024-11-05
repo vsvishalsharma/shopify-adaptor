@@ -195,8 +195,6 @@ body:
     attributes:
       label: Angel Mentor
       description: Please tag relevant mentors for the ticket
-    validations:
-      required: true
 
   - type: dropdown
     id: ticket-complexity
