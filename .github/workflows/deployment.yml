@@ -1,0 +1,91 @@
+name: Shopify Adaptor
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+jobs:
+  ssh-ec2:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: SSH Setup and Cloning Repository
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ./key.pem
+          chmod 600 ./key.pem
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+          ssh -i ./key.pem ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} -T <<EOF
+          REPO_DIR=~/adaptor
+          echo "Removing existing repository directory if exists"
+          rm -rf \$REPO_DIR
+          echo "Cloning repository from main branch"
+          git clone --single-branch --branch main https://github.com/ONDC-Official/shopify-adaptor.git \$REPO_DIR
+          EOF
+
+      - name: Install Docker Compose (if not installed)
+        run: |
+          ssh -i ./key.pem ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<EOF
+          # Check if Docker Compose is installed
+          if ! command -v docker-compose &> /dev/null
+          then
+            echo "Docker Compose not found. Installing..."
+            sudo curl -L "https://github.com/docker/compose/releases/download/$(curl -s https://api.github.com/repos/docker/compose/releases/latest | jq -r .tag_name)/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+          else
+            echo "Docker Compose is already installed."
+          fi
+          EOF
+
+      - name: Write secrets to .env on EC2
+        run: |
+          echo "Writing secrets to .env file"
+          ssh -i ./key.pem ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<EOF
+          REPO_DIR=~/adaptor
+          echo "Writing environment variables to .env file"
+          echo "TEST_ENV=${{ secrets.TEST_ENV }}" >> \$REPO_DIR/.env
+          EOF
+
+      - name: Verify .env and docker-compose.yml files
+        run: |
+          ssh -i ./key.pem ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<EOF
+          REPO_DIR=~/adaptor
+          # Check if .env and docker-compose.yml files exist
+          if [ ! -f \$REPO_DIR/.env ]; then
+            echo ".env file not found in \$REPO_DIR!"
+            exit 1
+          fi
+          if [ ! -f \$REPO_DIR/docker-compose.yml ]; then
+            echo "docker-compose.yml file not found in \$REPO_DIR!"
+            exit 1
+          fi
+          echo ".env and docker-compose.yml files found."
+          EOF
+
+      - name: Adaptor Deployment
+        run: |
+          echo "Deploying with Docker Compose"
+          ssh -i ./key.pem ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} <<EOF
+          REPO_DIR=~/adaptor
+          cd \$REPO_DIR
+
+          # Ensure the .env and docker-compose.yml files exist
+          if [ ! -f .env ]; then
+            echo ".env file not found!"
+            exit 1
+          fi
+
+          if [ ! -f docker-compose.yml ]; then
+            echo "docker-compose.yml file not found!"
+            exit 1
+          fi
+
+          # Start the containers using Docker Compose
+          echo "Running docker-compose up -d --build"
+          sudo docker compose up -d --build
+          EOF
