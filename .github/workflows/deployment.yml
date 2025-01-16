@@ -24,8 +24,8 @@ jobs:
           REPO_DIR=~/adaptor
           echo "Removing existing repository directory if exists"
           rm -rf \$REPO_DIR
-          echo "Cloning repository from main branch"
-          git clone --single-branch --branch main https://github.com/ONDC-Official/shopify-adaptor.git \$REPO_DIR
+          echo "Cloning repository from master branch"
+          git clone --single-branch --branch master https://github.com/ONDC-Official/shopify-adaptor.git \$REPO_DIR
           EOF
 
       - name: Install Docker Compose (if not installed)
