@@ -1,3 +1,3 @@
-module github.com/vsvishalsharma/shopify-adaptor.git
+module shopify-adaptor
 
 go 1.20
