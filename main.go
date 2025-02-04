@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // ONDC Structures
@@ -51,6 +54,23 @@ type shopifyProduct struct {
 	Price string `json:"price"`
 }
 
+func init() {
+	// Load .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
+	// Set default environment variables if not already set
+	if os.Getenv("SHOPIFY_URL") == "" {
+		os.Setenv("SHOPIFY_URL", "https://testgamaa.myshopify.com")
+	}
+
+	// Log configuration on startup
+	log.Printf("Shopify URL: %s", os.Getenv("SHOPIFY_URL"))
+	log.Printf("Access Token configured: %v", os.Getenv("SHOPIFY_ACCESS_TOKEN") != "")
+}
+
 func main() {
 	http.HandleFunc("/search", searchHandler)
 	log.Println("Server started on :9090")
@@ -64,7 +84,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
 		return
 	}
-	
+
 	// Send immediate ACK
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
@@ -72,7 +92,7 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Printf("Error sending ACK: %v", err)
 	}
-	
+
 	// Process async
 	go processSearch(req)
 }
@@ -87,7 +107,7 @@ func processSearch(req ONDCSearchRequest) {
 	}
 
 	catalog := transformToONDCCatalog(products)
-	
+
 	if err := sendOnSearch(req.Context.BapURI, catalog, req.Context.MessageID); err != nil {
 		log.Printf("Failed to send on_search for message ID %s: %v", req.Context.MessageID, err)
 	}
@@ -97,10 +117,12 @@ func queryShopify(query string) []shopifyProduct {
 	shopifyURL := os.Getenv("SHOPIFY_URL")
 	accessToken := os.Getenv("SHOPIFY_ACCESS_TOKEN")
 
+	log.Printf("Starting Shopify query with URL: %s", shopifyURL)
+
 	if shopifyURL == "" || accessToken == "" {
-		log.Printf("Error: Missing Shopify configuration - URL: %s, Access Token: %s", 
-			shopifyURL, 
-			func() string { 
+		log.Printf("Error: Missing Shopify configuration - URL: %s, Access Token: %s",
+			shopifyURL,
+			func() string {
 				if accessToken != "" {
 					return "**REDACTED**"
 				}
@@ -128,10 +150,12 @@ func queryShopify(query string) []shopifyProduct {
 		}
 	}`, query)
 
+	log.Printf("Executing GraphQL query: %s", gqlQuery)
+
 	reqBody := struct {
 		Query string `json:"query"`
 	}{Query: gqlQuery}
-	
+
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		log.Printf("Error marshaling GraphQL request body: %v", err)
@@ -149,24 +173,26 @@ func queryShopify(query string) []shopifyProduct {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Shopify request failed: network error - %v", err)
+		log.Printf("Shopify request failed: %v", err)
 		return nil
 	}
 	defer resp.Body.Close()
 
-	// Check HTTP status code
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Shopify API returned non-200 status: %s", resp.Status)
+	// Read and log the raw response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Error reading response body: %v", err)
 		return nil
 	}
+	log.Printf("Raw Shopify response: %s", string(respBody))
 
 	var result struct {
 		Data struct {
 			Products struct {
 				Edges []struct {
 					Node struct {
-						ID     string `json:"id"`
-						Title  string `json:"title"`
+						ID       string `json:"id"`
+						Title    string `json:"title"`
 						Variants struct {
 							Edges []struct {
 								Node struct {
@@ -183,12 +209,11 @@ func queryShopify(query string) []shopifyProduct {
 		} `json:"errors"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		log.Printf("Error decoding Shopify GraphQL response: %v", err)
 		return nil
 	}
 
-	// Check for GraphQL errors
 	if len(result.Errors) > 0 {
 		for _, gqlErr := range result.Errors {
 			log.Printf("GraphQL error: %s", gqlErr.Message)
@@ -210,7 +235,7 @@ func queryShopify(query string) []shopifyProduct {
 		})
 	}
 
-	log.Printf("Shopify query successful. Found %d products", len(products))
+	log.Printf("Successfully found %d products", len(products))
 	return products
 }
 
@@ -292,6 +317,8 @@ func sendOnSearch(bapURI string, catalog ONDCCatalog, messageID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal on_search response: %v", err)
 	}
+
+	log.Printf("Sending on_search to %s with payload: %s", bapURI+"/on_search", string(payload))
 
 	resp, err := http.Post(bapURI+"/on_search", "application/json", bytes.NewBuffer(payload))
 	if err != nil {
