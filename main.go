@@ -97,23 +97,6 @@ type shopifyProduct struct {
 	Price string `json:"price"`
 }
 
-func init() {
-	// Load .env file if available
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("No .env file found, using system environment variables")
-	}
-
-	// Set default environment variables if not already set
-	if os.Getenv("SHOPIFY_URL") == "" {
-		os.Setenv("SHOPIFY_URL", "https://testgamaa.myshopify.com")
-	}
-
-	// Log configuration on startup
-	log.Printf("Shopify URL: %s", os.Getenv("SHOPIFY_URL"))
-	log.Printf("Access Token configured: %v", os.Getenv("SHOPIFY_ACCESS_TOKEN") != "")
-}
-
 func main() {
 	http.HandleFunc("/search", searchHandler)
 	log.Println("Server started on :9090")
@@ -137,8 +120,8 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Printf("Error sending ACK: %v", err)
 	}
-
-	// Process search asynchronously
+	
+	// Process async
 	go processSearch(req)
 }
 
@@ -157,9 +140,8 @@ func processSearch(req ONDCSearchRequest) {
 
 	// Transform the Shopify products into an ONDC catalog format.
 	catalog := transformToONDCCatalog(products)
-
-	// Pass the entire request structure for context
-	if err := sendOnSearch(req.Context.BapURI, catalog, req); err != nil {
+	
+	if err := sendOnSearch(req.Context.BapURI, catalog, req.Context.MessageID); err != nil {
 		log.Printf("Failed to send on_search for message ID %s: %v", req.Context.MessageID, err)
 	}
 }
@@ -202,9 +184,7 @@ func queryShopify(cityCode string) []shopifyProduct {
 				}
 			}
 		}
-	}`, cityCode)
-
-	log.Printf("Executing GraphQL query: %s", gqlQuery)
+	}`, query)
 
 	reqBody := struct {
 		Query string `json:"query"`
@@ -232,10 +212,9 @@ func queryShopify(cityCode string) []shopifyProduct {
 	}
 	defer resp.Body.Close()
 
-	// Read and log the raw response from Shopify.
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Error reading response body: %v", err)
+	// Check HTTP status code
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Shopify API returned non-200 status: %s", resp.Status)
 		return nil
 	}
 	log.Printf("Raw Shopify response: %s", string(respBody))
@@ -405,6 +384,8 @@ func sendOnSearch(bapURI string, catalog ONDCCatalog, req ONDCSearchRequest) err
 	if err != nil {
 		return fmt.Errorf("failed to marshal on_search response: %v", err)
 	}
+
+	log.Printf("Sending on_search to %s with payload: %s", bapURI+"/on_search", string(payload))
 
 	log.Printf("Sending on_search to %s with payload:\n%s", bapURI+"/on_search", string(prettyPayload))
 
