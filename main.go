@@ -14,28 +14,68 @@ import (
 )
 
 // ONDC Structures
+
 type ONDCSearchRequest struct {
 	Context struct {
-		Domain    string `json:"domain"`
-		BapURI    string `json:"bap_uri"`
-		MessageID string `json:"message_id"`
+		Domain        string `json:"domain"`
+		Action        string `json:"action"`
+		Country       string `json:"country"`
+		City          string `json:"city"`
+		CoreVersion   string `json:"core_version"`
+		BapID         string `json:"bap_id"`
+		BapURI        string `json:"bap_uri"`
+		TransactionID string `json:"transaction_id"`
+		MessageID     string `json:"message_id"`
+		Timestamp     string `json:"timestamp"`
+		TTL           string `json:"ttl"`
 	} `json:"context"`
 	Message struct {
 		Intent struct {
-			Item struct {
-				Descriptor struct {
-					Name string `json:"name"`
-				} `json:"descriptor"`
-			} `json:"item"`
+			Category struct {
+				ID string `json:"id"`
+			} `json:"category"`
+			Fulfillment struct {
+				// fulfillment section is no longer used for city code as per instructions
+				Type string `json:"type"`
+			} `json:"fulfillment"`
+			Payment struct {
+				FinderFeeType   string `json:"@ondc/org/buyer_app_finder_fee_type"`
+				FinderFeeAmount string `json:"@ondc/org/buyer_app_finder_fee_amount"`
+			} `json:"payment"`
+			Tags []struct {
+				Code string `json:"code"`
+				List []struct {
+					Code  string `json:"code"`
+					Value string `json:"value"`
+				} `json:"list"`
+			} `json:"tags"`
 		} `json:"intent"`
 	} `json:"message"`
 }
 
 type ONDCCatalog struct {
+	Fulfillments []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"bpp/fulfillments"`
+	Descriptor struct {
+		Name      string   `json:"name"`
+		Symbol    string   `json:"symbol"`
+		ShortDesc string   `json:"short_desc"`
+		LongDesc  string   `json:"long_desc"`
+		Images    []string `json:"images"`
+		Tags      []struct {
+			Code string `json:"code"`
+			List []struct {
+				Code  string `json:"code"`
+				Value string `json:"value"`
+			} `json:"list"`
+		} `json:"tags"`
+	} `json:"bpp/descriptor"`
 	Providers []struct {
 		ID    string `json:"id"`
 		Items []struct {
-			ID        string `json:"id"`
+			ID         string `json:"id"`
 			Descriptor struct {
 				Name string `json:"name"`
 			} `json:"descriptor"`
@@ -48,6 +88,7 @@ type ONDCCatalog struct {
 }
 
 // Shopify Structures
+
 type shopifyProduct struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -55,7 +96,7 @@ type shopifyProduct struct {
 }
 
 func init() {
-	// Load .env file
+	// Load .env file if available
 	err := godotenv.Load()
 	if err != nil {
 		log.Println("No .env file found, using system environment variables")
@@ -77,6 +118,8 @@ func main() {
 	log.Fatal(http.ListenAndServe(":9090", nil))
 }
 
+// searchHandler decodes the ONDC search request, sends an immediate ACK,
+// and then asynchronously processes the search by querying Shopify.
 func searchHandler(w http.ResponseWriter, r *http.Request) {
 	var req ONDCSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -93,27 +136,35 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error sending ACK: %v", err)
 	}
 
-	// Process async
+	// Process search asynchronously
 	go processSearch(req)
 }
 
+// processSearch now picks the city from context.city and queries Shopify accordingly.
 func processSearch(req ONDCSearchRequest) {
-	searchTerm := req.Message.Intent.Item.Descriptor.Name
-	log.Printf("Processing search for term: %s", searchTerm)
+	city := req.Context.City
+	log.Printf("Processing search for city: %s", city)
 
-	products := queryShopify(searchTerm)
+	// Query Shopify for products using a tag-based search.
+	products := queryShopify(city)
+
 	if len(products) == 0 {
-		log.Printf("No products found for search term: %s", searchTerm)
+		log.Printf("No products found for search term: %s", city)
 	}
 
+	// Transform the Shopify products into an ONDC catalog format with all mandatory attributes.
 	catalog := transformToONDCCatalog(products)
 
-	if err := sendOnSearch(req.Context.BapURI, catalog, req.Context.MessageID); err != nil {
+	// Pass the entire request structure for context
+	if err := sendOnSearch(req.Context.BapURI, catalog, req); err != nil {
 		log.Printf("Failed to send on_search for message ID %s: %v", req.Context.MessageID, err)
 	}
 }
 
-func queryShopify(query string) []shopifyProduct {
+// queryShopify constructs and sends a GraphQL query to Shopify to retrieve
+// products that have tags matching the search criteria.
+// If the context city equals "std:080", it searches for products tagged with "Delhi" OR "080".
+func queryShopify(city string) []shopifyProduct {
 	shopifyURL := os.Getenv("SHOPIFY_URL")
 	accessToken := os.Getenv("SHOPIFY_ACCESS_TOKEN")
 
@@ -132,8 +183,16 @@ func queryShopify(query string) []shopifyProduct {
 	}
 
 	fullShopifyURL := shopifyURL + "/admin/api/2025-01/graphql.json"
+
+	// Set the query tag. If city is "std:080", use both tags "Delhi" OR "080"
+	queryTag := city
+	if city == "std:080" {
+		queryTag = "Delhi OR 080"
+	}
+
+	// Use a GraphQL query that filters products based on the tag(s)
 	gqlQuery := fmt.Sprintf(`{
-		products(first: 10, query: "title:*%s*") {
+		products(first: 10, query: "tag:%s") {
 			edges {
 				node {
 					id
@@ -148,7 +207,7 @@ func queryShopify(query string) []shopifyProduct {
 				}
 			}
 		}
-	}`, query)
+	}`, queryTag)
 
 	log.Printf("Executing GraphQL query: %s", gqlQuery)
 
@@ -162,23 +221,23 @@ func queryShopify(query string) []shopifyProduct {
 		return nil
 	}
 
-	req, err := http.NewRequest("POST", fullShopifyURL, bytes.NewBuffer(body))
+	httpReq, err := http.NewRequest("POST", fullShopifyURL, bytes.NewBuffer(body))
 	if err != nil {
 		log.Printf("Error creating Shopify request: %v", err)
 		return nil
 	}
-	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("X-Shopify-Access-Token", accessToken)
+	httpReq.Header.Add("Content-Type", "application/json")
+	httpReq.Header.Add("X-Shopify-Access-Token", accessToken)
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		log.Printf("Shopify request failed: %v", err)
 		return nil
 	}
 	defer resp.Body.Close()
 
-	// Read and log the raw response
+	// Read and log the raw response from Shopify.
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("Error reading response body: %v", err)
@@ -239,88 +298,165 @@ func queryShopify(query string) []shopifyProduct {
 	return products
 }
 
+// transformToONDCCatalog converts the list of Shopify products into the ONDC catalog format
+// and includes all mandatory attributes.
 func transformToONDCCatalog(products []shopifyProduct) ONDCCatalog {
-	catalog := ONDCCatalog{
-		Providers: []struct {
-			ID    string `json:"id"`
-			Items []struct {
-				ID        string `json:"id"`
-				Descriptor struct {
-					Name string `json:"name"`
-				} `json:"descriptor"`
-				Price struct {
-					Currency string `json:"currency"`
-					Value    string `json:"value"`
-				} `json:"price"`
-			} `json:"items"`
-		}{
-			{
-				ID: "shopify-store",
-			},
-		},
-	}
+    catalog := ONDCCatalog{
+        Fulfillments: []struct {
+            ID   string `json:"id"`
+            Type string `json:"type"`
+        }{
+            {ID: "1", Type: "Delivery"},
+            {ID: "2", Type: "Self-Pickup"},
+            {ID: "3", Type: "Delivery and Self-Pickup"},
+        },
+        Descriptor: struct {
+            Name      string   `json:"name"`
+            Symbol    string   `json:"symbol"`
+            ShortDesc string   `json:"short_desc"`
+            LongDesc  string   `json:"long_desc"`
+            Images    []string `json:"images"`
+            Tags      []struct {
+                Code string `json:"code"`
+                List []struct {
+                    Code  string `json:"code"`
+                    Value string `json:"value"`
+                } `json:"list"`
+            } `json:"tags"`
+        }{
+            Name:      "Seller NP",
+            Symbol:    "https://sellerNP.com/images/np.png",
+            ShortDesc: "Seller Marketplace",
+            LongDesc:  "Seller Marketplace",
+            Images:    []string{"https://sellerNP.com/images/np.png"},
+            Tags: []struct {
+                Code string `json:"code"`
+                List []struct {
+                    Code  string `json:"code"`
+                    Value string `json:"value"`
+                } `json:"list"`
+            }{
+                {
+                    Code: "bpp_terms",
+                    List: []struct {
+                        Code  string `json:"code"`
+                        Value string `json:"value"`
+                    }{
+                        {Code: "np_type", Value: "MSN"},
+                        {Code: "accept_bap_terms", Value: "Y"},
+                        {Code: "collect_payment", Value: "Y"},
+                    },
+                },
+            },
+        },
+        Providers: []struct {
+            ID    string `json:"id"`
+            Items []struct {
+                ID         string `json:"id"`
+                Descriptor struct {
+                    Name string `json:"name"`
+                } `json:"descriptor"`
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+            } `json:"items"`
+        }{
+            {
+                ID: "P1",
+                Items: []struct {
+                    ID         string `json:"id"`
+                    Descriptor struct {
+                        Name string `json:"name"`
+                    } `json:"descriptor"`
+                    Price struct {
+                        Currency string `json:"currency"`
+                        Value    string `json:"value"`
+                    } `json:"price"`
+                }{},
+            },
+        },
+    }
 
-	for _, p := range products {
-		item := struct {
-			ID        string `json:"id"`
-			Descriptor struct {
-				Name string `json:"name"`
-			} `json:"descriptor"`
-			Price struct {
-				Currency string `json:"currency"`
-				Value    string `json:"value"`
-			} `json:"price"`
-		}{
-			ID: p.ID,
-			Descriptor: struct {
-				Name string `json:"name"`
-			}{Name: p.Title},
-			Price: struct {
-				Currency string `json:"currency"`
-				Value    string `json:"value"`
-			}{
-				Currency: "INR",
-				Value:    p.Price,
-			},
-		}
-		catalog.Providers[0].Items = append(catalog.Providers[0].Items, item)
-	}
+    // Build more comprehensive items based on products
+    for i, p := range products {
+        itemID := fmt.Sprintf("I%d", i+1)
+        item := struct {
+            ID         string `json:"id"`
+            Descriptor struct {
+                Name string `json:"name"`
+            } `json:"descriptor"`
+            Price struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            } `json:"price"`
+        }{
+            ID: itemID,
+            Descriptor: struct {
+                Name string `json:"name"`
+            }{Name: p.Title},
+            Price: struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            }{
+                Currency: "INR",
+                Value:    p.Price,
+            },
+        }
+        catalog.Providers[0].Items = append(catalog.Providers[0].Items, item)
+    }
 
-	return catalog
+    return catalog
 }
 
-func sendOnSearch(bapURI string, catalog ONDCCatalog, messageID string) error {
+// sendOnSearch sends the ONDC on_search response to the BAP's on_search endpoint.
+// It formats the JSON payload with indentation before sending.
+func sendOnSearch(bapURI string, catalog ONDCCatalog, req ONDCSearchRequest) error {
 	response := struct {
 		Context struct {
-			Domain    string `json:"domain"`
-			MessageID string `json:"message_id"`
+			Domain        string `json:"domain"`
+			Country       string `json:"country"`
+			City          string `json:"city"`
+			Action        string `json:"action"`
+			CoreVersion   string `json:"core_version"`
+			BapID         string `json:"bap_id"`
+			BapURI        string `json:"bap_uri"`
+			BppID         string `json:"bpp_id"`
+			BppURI        string `json:"bpp_uri"`
+			TransactionID string `json:"transaction_id"`
+			MessageID     string `json:"message_id"`
+			Timestamp     string `json:"timestamp"`
 		} `json:"context"`
 		Message struct {
 			Catalog ONDCCatalog `json:"catalog"`
 		} `json:"message"`
-	}{
-		Context: struct {
-			Domain    string `json:"domain"`
-			MessageID string `json:"message_id"`
-		}{
-			Domain:    "nic2004:52110",
-			MessageID: messageID,
-		},
-		Message: struct {
-			Catalog ONDCCatalog `json:"catalog"`
-		}{
-			Catalog: catalog,
-		},
-	}
+	}{}
+	// Populate context from the request and environment values.
+	response.Context.Domain = req.Context.Domain
+	response.Context.Country = req.Context.Country
+	response.Context.City = req.Context.City
+	response.Context.Action = "on_search"
+	response.Context.CoreVersion = "1.2.0"
+	response.Context.BapID = req.Context.BapID
+	response.Context.BapURI = req.Context.BapURI
+	response.Context.BppID = os.Getenv("BPP_ID")
+	response.Context.BppURI = os.Getenv("BPP_URI")
+	response.Context.TransactionID = req.Context.TransactionID
+	response.Context.MessageID = req.Context.MessageID
+	response.Context.Timestamp = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+    
 
-	payload, err := json.Marshal(response)
+	response.Message.Catalog = catalog
+
+	// Format the JSON payload with indentation for easier reading.
+	prettyPayload, err := json.MarshalIndent(response, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal on_search response: %v", err)
 	}
 
-	log.Printf("Sending on_search to %s with payload: %s", bapURI+"/on_search", string(payload))
+	log.Printf("Sending on_search to %s with payload:\n%s", bapURI+"/on_search", string(prettyPayload))
 
-	resp, err := http.Post(bapURI+"/on_search", "application/json", bytes.NewBuffer(payload))
+	resp, err := http.Post(bapURI+"/on_search", "application/json", bytes.NewBuffer(prettyPayload))
 	if err != nil {
 		return fmt.Errorf("failed to send on_search: %v", err)
 	}
@@ -330,6 +466,6 @@ func sendOnSearch(bapURI string, catalog ONDCCatalog, messageID string) error {
 		return fmt.Errorf("on_search failed with status: %s", resp.Status)
 	}
 
-	log.Printf("Successfully sent on_search response for message ID: %s", messageID)
+	log.Printf("Successfully sent on_search response for message ID: %s", req.Context.MessageID)
 	return nil
 }
