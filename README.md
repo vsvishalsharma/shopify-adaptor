@@ -1,144 +1,195 @@
-# Shopify ONDC Adaptor
+# Shopify ONDC Adapter
 
-A Go-based adaptor that connects Shopify stores to the ONDC (Open Network for Digital Commerce) network. This adaptor allows Shopify merchants to list their products on ONDC by translating between Shopify's GraphQL API and ONDC's protocol.
+A Go-based adapter that connects Shopify stores to the ONDC (Open Network for Digital Commerce) network. This adapter enables Shopify merchants to list their products on ONDC by translating between Shopify's GraphQL API and ONDC's protocol.
 
 ## Prerequisites
-
 - Go 1.19 or higher
-- Shopify store with API access
+- A Shopify store with API access
 - Shopify Admin API access token
-- `netcat` (nc) for testing callbacks
+- Netcat (`nc`) for testing callbacks
 
 ## Configuration
 
 ### Environment Variables
+The adapter requires the following environment variables:
 
-The adaptor requires the following environment variables:
-
-```bash
+```sh
 SHOPIFY_URL=https://your-store.myshopify.com
 SHOPIFY_ACCESS_TOKEN=your_access_token
 ```
 
-These can be set in your environment or will use default test values if not set.
+Set these in your environment or they will default to test values if not set.
 
 ## Installation
 
-1. Clone the repository:
-```bash
+Clone the repository:
+
+```sh
 git clone [repository-url]
-cd shopify-ondc-adaptor
+cd shopify-ondc-adapter
 ```
 
-2. Install dependencies:
-```bash
+Install dependencies:
+
+```sh
 go mod download
+go mod tidy
 ```
 
 ## Running the Server
 
 Start the server:
-```bash
-go run main.go
+
+```sh
+go run .
 ```
 
-The server will start on port 9090.
+The server will start on port `9090`.
 
 ## Testing
 
 ### 1. Start the Callback Listener
-
 Open a terminal and start a netcat listener to simulate the ONDC callback endpoint:
-```bash
-nc -l -p 8082
+
+```sh
+nc -l -p 9091
 ```
 
-### 2. Send a Test Request
+### 2. Send a Test Search Request
 
-In another terminal, send a test search request:
-```bash
+In another terminal, send a test search request to `localhost:9090`:
+
+```sh
 curl -X POST http://localhost:9090/search \
--H "Content-Type: application/json" \
--d '{
-  "context": {
-    "domain": "nic2004:52110",
-    "bap_uri": "http://localhost:8082",
-    "message_id": "123456"
-  },
-  "message": {
-    "intent": {
-      "item": {
-        "descriptor": {
-          "name": "Example T-Shirt"
-        }
+  -H "Content-Type: application/json" \
+  -d '{
+    "context": {
+      "domain": "ONDC:RET10",
+      "action": "search",
+      "country": "IND",
+      "city": "std:080",
+      "core_version": "1.2.0",
+      "bap_id": "buyerNP.com",
+      "bap_uri": "http://localhost:9091",
+      "transaction_id": "T1",
+      "message_id": "M1",
+      "timestamp": "2025-02-08T04:32:05.303Z",
+      "ttl": "PT30S"
+    },
+    "message": {
+      "intent": {
+        "category": {
+          "id": "Foodgrains"
+        },
+        "fulfillment": {
+          "type": "Delivery"
+        },
+        "payment": {
+          "@ondc/org/buyer_app_finder_fee_type": "percent",
+          "@ondc/org/buyer_app_finder_fee_amount": "3"
+        },
+        "tags": [
+          {
+            "code": "bap_terms",
+            "list": [
+              {
+                "code": "static_terms",
+                "value": ""
+              },
+              {
+                "code": "static_terms_new",
+                "value": "https://github.com/ONDC-Official/NP-Static-Terms/buyerNP_BNP/1.0/tc.pdf"
+              },
+              {
+                "code": "effective_date",
+                "value": "2023-10-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
       }
     }
-  }
-}'
+  }'
 ```
 
 ### 3. Verify the Responses
-
 You should see:
-1. An immediate ACK response from the /search endpoint
-2. Server logs showing the Shopify GraphQL query
-3. The callback response in your netcat terminal
+- An immediate ACK response from the `/search` endpoint.
+- Server logs showing the Shopify GraphQL query.
+- The callback response in your netcat (`nc`) terminal, similar to:
 
-### Test with Different Products
-
-Test searching for different products by modifying the `name` field in the request:
-```bash
-curl -X POST http://localhost:9090/search \
--H "Content-Type: application/json" \
--d '{
+```json
+{
   "context": {
-    "domain": "nic2004:52110",
-    "bap_uri": "http://localhost:8082",
-    "message_id": "123456"
+    "domain": "ONDC:RET10",
+    "country": "IND",
+    "city": "std:080",
+    "action": "on_search",
+    "core_version": "1.2.0",
+    "bap_id": "buyerNP.com",
+    "bap_uri": "http://localhost:9091",
+    "bpp_id": "sellerNP.com",
+    "bpp_uri": "http://localhost:9090",
+    "transaction_id": "T1",
+    "message_id": "M1",
+    "timestamp": "2025-02-08T04:32:05.303Z"
   },
   "message": {
-    "intent": {
-      "item": {
-        "descriptor": {
-          "name": "YOUR_PRODUCT_NAME"
+    "catalog": {
+      "bpp/fulfillments": [
+        {
+          "id": "1",
+          "type": "Delivery"
+        },
+        {
+          "id": "2",
+          "type": "Self-Pickup"
         }
-      }
+      ],
+      "bpp/descriptor": {
+        "name": "Seller NP",
+        "symbol": "https://sellerNP.com/images/np.png"
+      },
+      "bpp/providers": [
+        {
+          "id": "P1",
+          "items": [
+            {
+              "id": "I1",
+              "descriptor": {
+                "name": "Example T-Shirt"
+              },
+              "price": {
+                "currency": "INR",
+                "value": "25.00"
+              }
+            }
+          ]
+        }
+      ]
     }
   }
-}'
-```
-
-### Testing the Shopify GraphQL API Directly
-
-You can test the Shopify GraphQL API directly using curl:
-```bash
-curl -X POST "https://your-store.myshopify.com/admin/api/2025-01/graphql.json" \
-  -H "Content-Type: application/json" \
-  -H "X-Shopify-Access-Token: your_access_token" \
-  -d '{
-    "query": "{ products(first: 10, query: \"title:*Example T-Shirt*\") { edges { node { id title variants(first: 1) { edges { node { price } } } } } } }"
-  }'
+}
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Empty Product List**
-   - Verify your Shopify store has products
-   - Check the search term matches product titles
-   - Verify the GraphQL query response in the logs
+#### 1. Empty Product List
+- Verify your Shopify store has products.
+- Check if the search term matches product titles.
+- Check server logs for Shopify GraphQL query responses.
 
-2. **Connection Refused on Callback**
-   - Ensure netcat is running on port 8082
-   - Check the bap_uri in your request matches the netcat port
+#### 2. Connection Refused on Callback
+- Ensure `nc` (netcat) is running on port 9091.
+- Verify `bap_uri` in your request matches the netcat port.
 
-3. **Authentication Errors**
-   - Verify your SHOPIFY_ACCESS_TOKEN is correct
-   - Check the token has the necessary permissions
+#### 3. Authentication Errors
+- Ensure `SHOPIFY_ACCESS_TOKEN` is correct.
+- Verify the token has the necessary permissions.
 
-### Debugging
-
+## Debugging
 The server provides detailed logs for debugging:
 - Incoming search requests
 - GraphQL queries sent to Shopify
@@ -151,13 +202,13 @@ Monitor these logs in the terminal where you run `go run main.go`.
 
 ### Search Endpoint
 
-`POST /search`
+**POST** `/search`
 
-Request body:
+#### Request Body:
 ```json
 {
   "context": {
-    "domain": "nic2004:52110",
+    "domain": "ONDC:RET10",
     "bap_uri": "string",
     "message_id": "string"
   },
@@ -173,7 +224,7 @@ Request body:
 }
 ```
 
-Response:
+#### Response:
 ```json
 {
   "message": {
@@ -185,9 +236,7 @@ Response:
 ```
 
 ## Contributing
-
 Please submit issues and pull requests for any improvements you'd like to make.
 
-## License
 
-[Your License Here]
+
