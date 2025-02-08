@@ -196,7 +196,7 @@ The server provides detailed logs for debugging:
 - Raw responses from Shopify
 - Callback attempts and responses
 
-Monitor these logs in the terminal where you run `go run .`.
+Monitor these logs in the terminal where you run `go run .`
 
 ## API Reference
 
