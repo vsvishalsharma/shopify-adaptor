@@ -84,3 +84,142 @@ type shopifyProduct struct {
 	Title string `json:"title"`
 	Price string `json:"price"`
 }
+
+type ONDCContext struct {
+    Domain        string `json:"domain"`
+    Action        string `json:"action"`
+    CoreVersion   string `json:"core_version"`
+    BapID        string `json:"bap_id"`
+    BapURI       string `json:"bap_uri"`
+    BppID        string `json:"bpp_id"`
+    BppURI       string `json:"bpp_uri"`
+    TransactionID string `json:"transaction_id"`
+    MessageID    string `json:"message_id"`
+    City         string `json:"city"`
+    Country      string `json:"country"`
+    Timestamp    string `json:"timestamp"`
+}
+
+type ShopifyResponse struct {
+    Data struct {
+        Products struct {
+            Edges []struct {
+                Node struct {
+                    ID       string `json:"id"`
+                    Title    string `json:"title"`
+                    Variants struct {
+                        Edges []struct {
+                            Node struct {
+                                Price string `json:"price"`
+                            } `json:"node"`
+                        } `json:"edges"`
+                    } `json:"variants"`
+                } `json:"node"`
+            } `json:"edges"`
+        } `json:"products"`
+    } `json:"data"`
+}
+
+type ONDCTag struct {
+    Code string        `json:"code"`
+    List []ONDCTagItem `json:"list"`
+}
+type ONDCTagItem struct {
+    Code  string `json:"code"`
+    Value string `json:"value"`
+}
+
+type ONDCSelectRequest struct {
+    Context ONDCContext `json:"context"`
+    Message struct {
+        Order struct {
+            Items []struct {
+                ID            string `json:"id"`
+                ParentItemID string `json:"parent_item_id"`
+                LocationID   string `json:"location_id"`
+                Quantity     struct {
+                    Count int `json:"count"`
+                } `json:"quantity"`
+                Tags []ONDCTag `json:"tags"`
+            } `json:"items"`
+            Offers []struct {
+                ID   string    `json:"id"`
+                Tags []ONDCTag `json:"tags"`
+            } `json:"offers"`
+            Fulfillments []struct {
+                End struct {
+                    Location struct {
+                        GPS     string `json:"gps"`
+                        Address struct {
+                            AreaCode string `json:"area_code"`
+                        } `json:"address"`
+                    } `json:"location"`
+                } `json:"end"`
+            } `json:"fulfillments"`
+            Payment struct {
+                Type string `json:"type"`
+            } `json:"payment"`
+        } `json:"order"`
+    } `json:"message"`
+}
+
+type ONDCSelectResponse struct {
+    Context ONDCContext `json:"context"`
+    Message struct {
+        Order struct {
+            Provider struct {
+                ID string `json:"id"`
+            } `json:"provider"`
+            Items []struct {
+                ID            string `json:"id"`
+                FulfillmentID string `json:"fulfillment_id"`
+                Quantity     struct {
+                    Available int `json:"available"`
+                    Maximum   int `json:"maximum"`
+                } `json:"quantity"`
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+                Breakup []struct {
+                    Title string `json:"title"`
+                    Price struct {
+                        Currency string `json:"currency"`
+                        Value    string `json:"value"`
+                    } `json:"price"`
+                } `json:"breakup"`
+            } `json:"items"`
+            Fulfillments []struct {
+                ID            string `json:"id"`
+                Type         string `json:"type"`
+                ProviderName string `json:"@ondc/org/provider_name"`
+                Tracking     bool   `json:"tracking"`
+                Category     string `json:"@ondc/org/category"`
+                TAT          string `json:"@ondc/org/TAT"`
+                State       struct {
+                    Descriptor struct {
+                        Code string `json:"code"`
+                    } `json:"descriptor"`
+                } `json:"state"`
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+            } `json:"fulfillments"`
+            Quote struct {
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+                Breakup []struct {
+                    Title string `json:"title"`
+                    Price struct {
+                        Currency string `json:"currency"`
+                        Value    string `json:"value"`
+                    } `json:"price"`
+                } `json:"breakup"`
+            } `json:"quote"`
+        } `json:"order"`
+    } `json:"message"`
+}
+

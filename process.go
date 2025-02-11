@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+    "log"
 )
 
 // processSearch handles the search request, querying Shopify and sending on_search response
@@ -23,4 +23,94 @@ func processSearch(req ONDCSearchRequest) {
 	if err := sendOnSearch(req.Context.BapURI, catalog, req); err != nil {
 		log.Printf("Failed to send on_search for message ID %s: %v", req.Context.MessageID, err)
 	}
+}
+
+func processSelect(req ONDCSelectRequest) {
+    log.Printf("Processing select for transaction: %s", req.Context.TransactionID)
+
+    // Query Shopify for product details
+    shopifyProducts := queryShopifyForSelect(req)
+    
+    // Create ShopifyResponse structure from products
+    shopifyResp := ShopifyResponse{
+        Data: struct {
+            Products struct {
+                Edges []struct {
+                    Node struct {
+                        ID       string `json:"id"`
+                        Title    string `json:"title"`
+                        Variants struct {
+                            Edges []struct {
+                                Node struct {
+                                    Price string `json:"price"`
+                                } `json:"node"`
+                            } `json:"edges"`
+                        } `json:"variants"`
+                    } `json:"node"`
+                } `json:"edges"`
+            } `json:"products"`
+        }{
+            Products: struct {
+                Edges []struct {
+                    Node struct {
+                        ID       string `json:"id"`
+                        Title    string `json:"title"`
+                        Variants struct {
+                            Edges []struct {
+                                Node struct {
+                                    Price string `json:"price"`
+                                } `json:"node"`
+                            } `json:"edges"`
+                        } `json:"variants"`
+                    } `json:"node"`
+                } `json:"edges"`
+            }{
+                Edges: make([]struct {
+                    Node struct {
+                        ID       string `json:"id"`
+                        Title    string `json:"title"`
+                        Variants struct {
+                            Edges []struct {
+                                Node struct {
+                                    Price string `json:"price"`
+                                } `json:"node"`
+                            } `json:"edges"`
+                        } `json:"variants"`
+                    } `json:"node"`
+                }, len(shopifyProducts)),
+            },
+        },
+    }
+
+    // Convert shopifyProducts to the expected format
+    for i, product := range shopifyProducts {
+        shopifyResp.Data.Products.Edges[i].Node.ID = product.ID
+        shopifyResp.Data.Products.Edges[i].Node.Title = product.Title
+        shopifyResp.Data.Products.Edges[i].Node.Variants.Edges = []struct {
+            Node struct {
+                Price string `json:"price"`
+            } `json:"node"`
+        }{
+            {
+                Node: struct {
+                    Price string `json:"price"`
+                }{
+                    Price: product.Price,
+                },
+            },
+        }
+    }
+
+    if len(shopifyProducts) == 0 {
+        log.Printf("No products found for selection: %v", req.Message.Order.Items)
+        return
+    }
+
+    // Transform into ONDC select response format
+    selectResponse := transformToONDCSelectResponse(req, shopifyResp)
+
+    // Send on_select response
+    if err := sendOnSelect(req.Context.BapURI, selectResponse, req); err != nil {
+        log.Printf("Failed to send on_select for transaction %s: %v", req.Context.TransactionID, err)
+    }
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"net/http"
 	"os"
 	"time"
@@ -178,4 +179,216 @@ func sendOnSearch(bapURI string, catalog ONDCCatalog, req ONDCSearchRequest) err
 
 	log.Printf("Successfully sent on_search response for message ID: %s", req.Context.MessageID)
 	return nil
+}
+
+
+func transformToONDCSelectResponse(req ONDCSelectRequest, shopifyResp ShopifyResponse) ONDCSelectResponse {
+    response := ONDCSelectResponse{
+        Context: ONDCContext{
+            Domain:        "ONDC:RET11",
+            Action:        "on_select",
+            CoreVersion:   "1.2.0",
+            BapID:        req.Context.BapID,
+            BapURI:       req.Context.BapURI,
+            BppID:        req.Context.BppID,
+            BppURI:       req.Context.BppURI,
+            TransactionID: req.Context.TransactionID,
+            MessageID:    req.Context.MessageID,
+            City:         req.Context.City,
+            Country:      req.Context.Country,
+            Timestamp:    time.Now().UTC().Format(time.RFC3339),
+        },
+    }
+
+    // Set provider ID
+    response.Message.Order.Provider.ID = "P1"
+
+    // Transform items
+    var totalValue float64
+    for _, edge := range shopifyResp.Data.Products.Edges {
+        price := edge.Node.Variants.Edges[0].Node.Price
+        priceFloat, _ := strconv.ParseFloat(price, 64)
+        totalValue += priceFloat
+
+        item := struct {
+            ID            string `json:"id"`
+            FulfillmentID string `json:"fulfillment_id"`
+            Quantity     struct {
+                Available int `json:"available"`
+                Maximum   int `json:"maximum"`
+            } `json:"quantity"`
+            Price struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            } `json:"price"`
+            Breakup []struct {
+                Title string `json:"title"`
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+            } `json:"breakup"`
+        }{
+            ID:            edge.Node.ID,
+            FulfillmentID: "F1617",
+            Quantity: struct {
+                Available int `json:"available"`
+                Maximum   int `json:"maximum"`
+            }{
+                Available: 5,
+                Maximum:   3,
+            },
+            Price: struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            }{
+                Currency: "INR",
+                Value:    price,
+            },
+            Breakup: []struct {
+                Title string `json:"title"`
+                Price struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                } `json:"price"`
+            }{
+                {
+                    Title: fmt.Sprintf("Base Item - %s", edge.Node.Title),
+                    Price: struct {
+                        Currency string `json:"currency"`
+                        Value    string `json:"value"`
+                    }{
+                        Currency: "INR",
+                        Value:    price,
+                    },
+                },
+            },
+        }
+        response.Message.Order.Items = append(response.Message.Order.Items, item)
+    }
+
+    // Add fulfillment
+    deliveryCharge := 30.0
+    totalValue += deliveryCharge
+    
+    fulfillment := struct {
+        ID            string `json:"id"`
+        Type         string `json:"type"`
+        ProviderName string `json:"@ondc/org/provider_name"`
+        Tracking     bool   `json:"tracking"`
+        Category     string `json:"@ondc/org/category"`
+        TAT          string `json:"@ondc/org/TAT"`
+        State       struct {
+            Descriptor struct {
+                Code string `json:"code"`
+            } `json:"descriptor"`
+        } `json:"state"`
+        Price struct {
+            Currency string `json:"currency"`
+            Value    string `json:"value"`
+        } `json:"price"`
+    }{
+        ID:           "F1617",
+        Type:         "Delivery",
+        ProviderName: "LSP Delivery",
+        Tracking:     false,
+        Category:     "Immediate Delivery",
+        TAT:          "PT60M",
+        State: struct {
+            Descriptor struct {
+                Code string `json:"code"`
+            } `json:"descriptor"`
+        }{
+            Descriptor: struct {
+                Code string `json:"code"`
+            }{
+                Code: "Serviceable",
+            },
+        },
+        Price: struct {
+            Currency string `json:"currency"`
+            Value    string `json:"value"`
+        }{
+            Currency: "INR",
+            Value:    fmt.Sprintf("%.2f", deliveryCharge),
+        },
+    }
+    response.Message.Order.Fulfillments = append(response.Message.Order.Fulfillments, fulfillment)
+
+    // Add quote
+    response.Message.Order.Quote = struct {
+        Price struct {
+            Currency string `json:"currency"`
+            Value    string `json:"value"`
+        } `json:"price"`
+        Breakup []struct {
+            Title string `json:"title"`
+            Price struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            } `json:"price"`
+        } `json:"breakup"`
+    }{
+        Price: struct {
+            Currency string `json:"currency"`
+            Value    string `json:"value"`
+        }{
+            Currency: "INR",
+            Value:    fmt.Sprintf("%.2f", totalValue),
+        },
+        Breakup: []struct {
+            Title string `json:"title"`
+            Price struct {
+                Currency string `json:"currency"`
+                Value    string `json:"value"`
+            } `json:"price"`
+        }{
+            {
+                Title: "Product Total",
+                Price: struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                }{
+                    Currency: "INR",
+                    Value:    fmt.Sprintf("%.2f", totalValue-deliveryCharge),
+                },
+            },
+            {
+                Title: "Delivery Charge",
+                Price: struct {
+                    Currency string `json:"currency"`
+                    Value    string `json:"value"`
+                }{
+                    Currency: "INR",
+                    Value:    fmt.Sprintf("%.2f", deliveryCharge),
+                },
+            },
+        },
+    }
+
+    return response
+}
+
+func sendOnSelect(bapURI string, response ONDCSelectResponse, req ONDCSelectRequest) error {
+    log.Printf("Sending on_select response for transaction %s", req.Context.TransactionID)
+
+    jsonResponse, err := json.MarshalIndent(response, "", "  ")
+    if err != nil {
+        return fmt.Errorf("failed to marshal on_select response: %v", err)
+    }
+
+    log.Printf("on_select Response: %s", string(jsonResponse))
+
+    resp, err := http.Post(bapURI+"/on_select", "application/json", bytes.NewBuffer(jsonResponse))
+    if err != nil {
+        return fmt.Errorf("failed to send on_select: %v", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("on_select failed with status: %s", resp.Status)
+    }
+
+    log.Printf("Successfully sent on_select response for transaction ID: %s", req.Context.TransactionID)
+    return nil
 }
