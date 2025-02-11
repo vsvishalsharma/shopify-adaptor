@@ -12,6 +12,8 @@ func main() {
 	// Set up routes
 	http.HandleFunc("/search", searchHandler)
 	
+	//
+	http.HandleFunc("/select", selectHandler)
 	// Log server startup
 	log.Println("Server started on :9090")
 	

@@ -28,3 +28,23 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
     // Process search asynchronously.
     go processSearch(req)
 }
+
+func selectHandler(w http.ResponseWriter, r *http.Request) {
+    var req ONDCSelectRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        log.Printf("Error decoding select request: %v", err)
+        http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
+        return
+    }
+
+    // Send immediate ACK.
+    w.Header().Set("Content-Type", "application/json")
+    if err := json.NewEncoder(w).Encode(map[string]interface{}{
+        "message": map[string]interface{}{"ack": map[string]string{"status": "ACK"}},
+    }); err != nil {
+        log.Printf("Error sending ACK: %v", err)
+    }
+
+    // Process select asynchronously.
+    go processSelect(req)
+}

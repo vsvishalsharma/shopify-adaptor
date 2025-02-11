@@ -147,3 +147,8 @@ func queryShopify(city string) []shopifyProduct {
 	log.Printf("Successfully found %d products", len(products))
 	return products
 }
+
+func queryShopifyForSelect(req ONDCSelectRequest) []shopifyProduct {
+    log.Printf("Querying Shopify for select operation...")
+    return queryShopify(req.Context.City) // Reusing existing query logic
+}
