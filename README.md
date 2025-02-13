@@ -112,7 +112,7 @@ curl -X POST http://localhost:9090/search \
   }'
 ```
 
-### 3. Verify the Responses
+###  Verify the Responses
 You should see:
 - An immediate ACK response from the `/search` endpoint.
 - Server logs showing the Shopify GraphQL query.
@@ -167,6 +167,244 @@ You should see:
           ]
         }
       ]
+    }
+  }
+}
+```
+
+### 3. Send a Test Select Request
+``` curl -X POST http://localhost:9090/select \
+  -H "Content-Type: application/json" \
+  -d '{
+    "context": {
+      "domain": "ONDC:RET11",
+      "action": "select",
+      "core_version": "1.2.0",
+      "bap_id": "buyerNP.com",
+      "bap_uri": "http://localhost:9091",
+      "bpp_id": "sellerNP.com",
+      "bpp_uri": "http://localhost:9090",
+      "transaction_id": "T2",
+      "message_id": "M2",
+      "city": "std:080",
+      "country": "IND",
+      "timestamp": "2025-02-08T05:00:00.000Z",
+      "ttl": "PT30S"
+    },
+    "message": {
+      "order": {
+        "provider": {
+          "id": "P1"
+        },
+        "items": [
+          {
+            "id": "DI1",
+            "parent_item_id": "BaseItem1",
+            "location_id": "L1",
+            "quantity": {
+              "count": 1
+            },
+            "tags": [
+              {
+                "code": "type",
+                "list": [
+                  {
+                    "code": "type",
+                    "value": "item"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "C1",
+            "parent_item_id": "DI1",
+            "location_id": "L1",
+            "quantity": {
+              "count": 1
+            },
+            "tags": [
+              {
+                "code": "type",
+                "list": [
+                  {
+                    "code": "type",
+                    "value": "customization"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "offers": [
+          {
+            "id": "BUY2GET3",
+            "tags": [
+              {
+                "code": "selection",
+                "list": [
+                  {
+                    "code": "apply",
+                    "value": "yes"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "fulfillments": [
+          {
+            "end": {
+              "location": {
+                "gps": "12.453544,77.928379",
+                "address": {
+                  "area_code": "560001"
+                }
+              }
+            },
+            "price": {
+              "currency": "INR",
+              "value": "30.00"
+            }
+          }
+        ],
+        "payment": {
+          "type": "ON-FULFILLMENT"
+        }
+      }
+    }
+  }'
+```
+
+### Verify on select Response
+
+``` 
+{
+  "context": {
+    "domain": "ONDC:RET11",
+    "action": "on_select",
+    "core_version": "1.2.0",
+    "bap_id": "buyerNP.com",
+    "bap_uri": "http://localhost:9091",
+    "bpp_id": "sellerNP.com",
+    "bpp_uri": "http://localhost:9090",
+    "transaction_id": "T2",
+    "message_id": "M2",
+    "city": "std:080",
+    "country": "IND",
+    "timestamp": "2025-02-13T13:09:29Z"
+  },
+  "message": {
+    "order": {
+      "provider": {
+        "id": "P1"
+      },
+      "items": [
+        {
+          "id": "gid://shopify/Product/15045213487475",
+          "fulfillment_id": "F1617",
+          "quantity": {
+            "available": 5,
+            "maximum": 3
+          },
+          "price": {
+            "currency": "INR",
+            "value": "25.00"
+          },
+          "breakup": [
+            {
+              "title": "Base Item - Example T-Shirt",
+              "price": {
+                "currency": "INR",
+                "value": "25.00"
+              }
+            }
+          ]
+        },
+        {
+          "id": "gid://shopify/Product/15045213520243",
+          "fulfillment_id": "F1617",
+          "quantity": {
+            "available": 5,
+            "maximum": 3
+          },
+          "price": {
+            "currency": "INR",
+            "value": "49.99"
+          },
+          "breakup": [
+            {
+              "title": "Base Item - Example Pants",
+              "price": {
+                "currency": "INR",
+                "value": "49.99"
+              }
+            }
+          ]
+        },
+        {
+          "id": "gid://shopify/Product/15046962577779",
+          "fulfillment_id": "F1617",
+          "quantity": {
+            "available": 5,
+            "maximum": 3
+          },
+          "price": {
+            "currency": "INR",
+            "value": "90.00"
+          },
+          "breakup": [
+            {
+              "title": "Base Item - Clavin klen t shirt",
+              "price": {
+                "currency": "INR",
+                "value": "90.00"
+              }
+            }
+          ]
+        }
+      ],
+      "fulfillments": [
+        {
+          "id": "F1617",
+          "type": "Delivery",
+          "@ondc/org/provider_name": "LSP Delivery",
+          "tracking": false,
+          "@ondc/org/category": "Immediate Delivery",
+          "@ondc/org/TAT": "PT60M",
+          "state": {
+            "descriptor": {
+              "code": "Serviceable"
+            }
+          },
+          "price": {
+            "currency": "INR",
+            "value": "30.00"
+          }
+        }
+      ],
+      "quote": {
+        "price": {
+          "currency": "INR",
+          "value": "194.99"
+        },
+        "breakup": [
+          {
+            "title": "Product Total",
+            "price": {
+              "currency": "INR",
+              "value": "164.99"
+            }
+          },
+          {
+            "title": "Delivery Charge",
+            "price": {
+              "currency": "INR",
+              "value": "30.00"
+            }
+          }
+        ]
+      }
     }
   }
 }
