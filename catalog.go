@@ -458,6 +458,9 @@ func sendOnSelect(bapURI string, response ONDCSelectResponse, req ONDCSelectRequ
 }
 
 
+
+// transformToONDCInitResponse constructs the /on_init response using selected Shopify product data.
+// It builds items, quote, billing, cancellation_terms, and a dynamic payment section.
 func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyResponse) ONDCInitResponse {
 	var response ONDCInitResponse
 
@@ -476,20 +479,6 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 
 	// Prepare accumulators.
 	var totalProductPrice float64
-	var quoteBreakup []struct {
-		ItemID       string `json:"@ondc/org/item_id"`
-		ItemQuantity struct {
-			Count int `json:"count"`
-		} `json:"@ondc/org/item_quantity"`
-		Title     string `json:"title"`
-		TitleType string `json:"@ondc/org/title_type"`
-		Price     struct {
-			Currency string `json:"currency"`
-			Value    string `json:"value"`
-		} `json:"price"`
-	}
-
-	// Build order items from the init request.
 	response.Message.Order.Items = []struct {
 		ID            string `json:"id"`
 		FulfillmentID string `json:"fulfillment_id"`
@@ -506,10 +495,10 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 		} `json:"tags"`
 	}{}
 
-	// For each requested item, find the matching Shopify product using the meta tag id.
+	// Process each requested item by matching with Shopify product data.
 	for _, reqItem := range req.Message.Order.Items {
 		for _, productEdge := range shopifyResp.Data.Products.Edges {
-			// Assume reqItem.ID contains the meta tag id which now matches productEdge.Node.ID.
+			// Here, reqItem.ID is expected to match the product meta tag value from Shopify.
 			if productEdge.Node.ID == reqItem.ID {
 				// Parse product price.
 				productPriceStr := productEdge.Node.Variants.Edges[0].Node.Price
@@ -520,7 +509,7 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 				}
 				totalProductPrice += productPrice * float64(quantity)
 
-				// Append order item using dynamic product ID.
+				// Append order item using the dynamic product ID.
 				response.Message.Order.Items = append(response.Message.Order.Items, struct {
 					ID            string `json:"id"`
 					FulfillmentID string `json:"fulfillment_id"`
@@ -542,8 +531,43 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 					ParentItemID:  reqItem.ParentItemID,
 					Tags:          reqItem.Tags,
 				})
+			}
+		}
+	}
 
-				// Append a quote breakup entry for this product.
+	// Read delivery fee from environment (default to 100.00 if not set).
+	deliveryFeeStr := os.Getenv("DELIVERY_FEE")
+	if deliveryFeeStr == "" {
+		deliveryFeeStr = "100.00"
+	}
+	deliveryFee, err := strconv.ParseFloat(deliveryFeeStr, 64)
+	if err != nil {
+		deliveryFee = 100.0
+	}
+	totalOrderPrice := totalProductPrice + deliveryFee
+
+	// Build the quote breakup.
+	var quoteBreakup []struct {
+		ItemID       string `json:"@ondc/org/item_id"`
+		ItemQuantity struct {
+			Count int `json:"count"`
+		} `json:"@ondc/org/item_quantity"`
+		Title     string `json:"title"`
+		TitleType string `json:"@ondc/org/title_type"`
+		Price     struct {
+			Currency string `json:"currency"`
+			Value    string `json:"value"`
+		} `json:"price"`
+	}
+	for _, reqItem := range req.Message.Order.Items {
+		for _, productEdge := range shopifyResp.Data.Products.Edges {
+			if productEdge.Node.ID == reqItem.ID {
+				productPriceStr := productEdge.Node.Variants.Edges[0].Node.Price
+				productPrice, _ := strconv.ParseFloat(productPriceStr, 64)
+				quantity := reqItem.Quantity.Count
+				if quantity == 0 {
+					quantity = 1
+				}
 				quoteBreakup = append(quoteBreakup, struct {
 					ItemID       string `json:"@ondc/org/item_id"`
 					ItemQuantity struct {
@@ -571,31 +595,7 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 			}
 		}
 	}
-
-	// Determine the delivery fulfillment ID from the init request (if provided).
-	deliveryID := ""
-	for _, f := range req.Message.Order.Fulfillments {
-		if f.Type == "Delivery" {
-			deliveryID = f.ID
-			break
-		}
-	}
-	if deliveryID == "" {
-		deliveryID = "F_DELIVERY" // fallback if none provided
-	}
-
-	// Read and compute delivery fee.
-	deliveryFeeStr := os.Getenv("DELIVERY_FEE")
-	if deliveryFeeStr == "" {
-		deliveryFeeStr = "50.00"
-	}
-	deliveryFee, err := strconv.ParseFloat(deliveryFeeStr, 64)
-	if err != nil {
-		deliveryFee = 50.0
-	}
-	totalOrderPrice := totalProductPrice + deliveryFee
-
-	// Append delivery charge to quote breakup.
+	// Append a breakup entry for delivery charges.
 	quoteBreakup = append(quoteBreakup, struct {
 		ItemID       string `json:"@ondc/org/item_id"`
 		ItemQuantity struct {
@@ -608,7 +608,7 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 			Value    string `json:"value"`
 		} `json:"price"`
 	}{
-		ItemID:       deliveryID,
+		ItemID:       "F1",
 		ItemQuantity: struct{ Count int `json:"count"` }{Count: 1},
 		Title:        "Delivery charges",
 		TitleType:    "delivery",
@@ -621,7 +621,7 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 		},
 	})
 
-	// Build Quote.
+	// Build the overall Quote.
 	response.Message.Order.Quote = struct {
 		Price struct {
 			Currency string `json:"currency"`
@@ -650,7 +650,16 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 		Breakup: quoteBreakup,
 	}
 
-	// Billing details (using static defaults; update as needed).
+	// Billing details: make email and phone dynamic.
+	billingEmail := os.Getenv("BILLING_EMAIL")
+	if billingEmail == "" {
+		billingEmail = "nobody@nomail.com"
+	}
+	billingPhone := os.Getenv("BILLING_PHONE")
+	if billingPhone == "" {
+		billingPhone = "9886098860"
+	}
+	// Address and name can remain static or be updated similarly.
 	response.Message.Order.Billing = struct {
 		Name    string `json:"name"`
 		Address struct {
@@ -683,11 +692,11 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 			Country:  "IND",
 			AreaCode: "560037",
 		},
-		Email: "nobody@nomail.com",
-		Phone: "9886098860",
+		Email: billingEmail,
+		Phone: billingPhone,
 	}
 
-	// Cancellation terms (sample values).
+	// Cancellation terms (static defaults).
 	response.Message.Order.CancellationTerms = []struct {
 		FulfillmentState struct {
 			Descriptor struct {
@@ -737,27 +746,47 @@ func transformToONDCInitResponse(req ONDCInitRequest, shopifyResp ShopifyRespons
 		},
 	}
 
-	// Payment details (sample values).
+	// Payment: Build dynamically using environment variables.
 	response.Message.Order.Payment = struct {
-		Type                    string `json:"type"`
-		CollectedBy             string `json:"collected_by"`
-		Status                  string `json:"status"`
-		BuyerAppFinderFeeType   string `json:"@ondc/org/buyer_app_finder_fee_type"`
-		BuyerAppFinderFeeAmount string `json:"@ondc/org/buyer_app_finder_fee_amount"`
-		SettlementBasis         string `json:"@ondc/org/settlement_basis"`
-		SettlementWindow        string `json:"@ondc/org/settlement_window"`
+		Uri                      string `json:"uri"`
+		BuyerAppFinderFeeType    string `json:"@ondc/org/buyer_app_finder_fee_type"`
+		BuyerAppFinderFeeAmount  string `json:"@ondc/org/buyer_app_finder_fee_amount"`
+		WithholdingAmount        string `json:"@ondc/org/withholding_amount"`
+		Tags                     []struct {
+			Code string `json:"code"`
+			List []struct {
+				Code  string `json:"code"`
+				Value string `json:"value"`
+			} `json:"list"`
+		} `json:"tags"`
 	}{
-		Type:                    "ON-ORDER",
-		CollectedBy:             "BPP",
-		Status:                  "NOT-PAID",
-		BuyerAppFinderFeeType:   "percent",
-		BuyerAppFinderFeeAmount: "3",
-		SettlementBasis:         "delivery",
-		SettlementWindow:        "P1D",
+		Uri:                     os.Getenv("PAYMENT_URI"),                     // e.g., "https://snp.com/pg"
+		BuyerAppFinderFeeType:   os.Getenv("BUYER_APP_FINDER_FEE_TYPE"),       // e.g., "percent"
+		BuyerAppFinderFeeAmount: os.Getenv("BUYER_APP_FINDER_FEE_AMOUNT"),     // e.g., "3"
+		WithholdingAmount:       os.Getenv("WITHHOLDING_AMOUNT"),              // e.g., "10.00"
+		Tags: []struct {
+			Code string `json:"code"`
+			List []struct {
+				Code  string `json:"code"`
+				Value string `json:"value"`
+			} `json:"list"`
+		}{
+			{
+				Code: "bpp_collect",
+				List: []struct {
+					Code  string `json:"code"`
+					Value string `json:"value"`
+				}{
+					{Code: "success", Value: os.Getenv("BPP_COLLECT_SUCCESS")}, // e.g., "Y"
+					{Code: "error", Value: os.Getenv("BPP_COLLECT_ERROR")},     // e.g., ".."
+				},
+			},
+		},
 	}
 
 	return response
 }
+
 
 
 // sendOnInit sends the ONDC on_init response to the BAP's on_init endpoint.

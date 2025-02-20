@@ -274,6 +274,7 @@ type ONDCInitRequest struct {
 }
 
 // Updated ONDCInitResponse to include billing, quote, cancellation_terms, etc.
+// Updated ONDCInitResponse to reflect the new Payment struct.
 type ONDCInitResponse struct {
 	Context ONDCContext `json:"context"`
 	Message struct {
@@ -347,13 +348,17 @@ type ONDCInitResponse struct {
 				} `json:"cancellation_fee"`
 			} `json:"cancellation_terms"`
 			Payment struct {
-				Type                    string `json:"type"`
-				CollectedBy             string `json:"collected_by"`
-				Status                  string `json:"status"`
-				BuyerAppFinderFeeType   string `json:"@ondc/org/buyer_app_finder_fee_type"`
-				BuyerAppFinderFeeAmount string `json:"@ondc/org/buyer_app_finder_fee_amount"`
-				SettlementBasis         string `json:"@ondc/org/settlement_basis"`
-				SettlementWindow        string `json:"@ondc/org/settlement_window"`
+				Uri                      string `json:"uri"`
+				BuyerAppFinderFeeType    string `json:"@ondc/org/buyer_app_finder_fee_type"`
+				BuyerAppFinderFeeAmount  string `json:"@ondc/org/buyer_app_finder_fee_amount"`
+				WithholdingAmount        string `json:"@ondc/org/withholding_amount"`
+				Tags                     []struct {
+					Code string `json:"code"`
+					List []struct {
+						Code  string `json:"code"`
+						Value string `json:"value"`
+					} `json:"list"`
+				} `json:"tags"`
 			} `json:"payment"`
 		} `json:"order"`
 	} `json:"message"`
